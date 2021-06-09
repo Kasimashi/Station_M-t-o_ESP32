@@ -7,36 +7,45 @@
 
 #define ARDUINOJSON_ENABLE_PROGMEM 0
 
-#include "Adafruit_BME280.h" //https://github.com/Takatsuki0204/BME280-I2C-ESP32
+#include <Adafruit_BME280.h>
+#include <Adafruit_Sensor.h>
 #include <ArduinoJson.h>    //https://github.com/bblanchon/ArduinoJson
 #include <WiFi.h>
 
-const char* ssid     = "yourSSID";
-const char* password = "yourPassword";
-String CityID = "253394"; //Sparta, Greece
-String APIKEY = "yourAPIkey";
-#define ALTITUDE 216.0 // Altitude in Sparta, Greece
+const char* ssid     = "aaaaaaaa";
+const char* password = "aaaaaa";
+unsigned int CityIDs[4] = {2984701,2984701,3022242,2997465}; //Quimper,Quimper,Crozon,Loudéac
+String APIKEY = "aa";
+#define ALTITUDE 30.0 // Altitude in Sparta, Greece
 
-#define I2C_SDA 27
-#define I2C_SCL 26
+#define I2C_SDA 21
+#define I2C_SCL 22
+
+#define SEALEVELPRESSURE_HPA (1013.25)
+
 #define LED_PIN 2
 #define BME280_ADDRESS 0x76  //If the sensor does not work, try the 0x77 address as well
 
+char city[10];
 float temperature = 0;
 float humidity = 0;
 float pressure = 0;
+int winddirection = 0;
+char stringwinddirection[2];
+int windspeed = 0;
 int weatherID = 0;
 
-Adafruit_BME280 bme(I2C_SDA, I2C_SCL);
+TwoWire I2CBME = TwoWire(0);
+Adafruit_BME280 bme;
 
 WiFiClient client;
 char* servername ="api.openweathermap.org";  // remote server we will connect to
 String result;
 
 int  iterations = 1800;
+unsigned int  current_city = 0;
 String weatherDescription ="";
 String weatherLocation = "";
-float Temperature;
 
 void setup() 
 {
@@ -52,14 +61,25 @@ void setup()
 void loop() {
  
  delay(2000);
-
- if(iterations == 1800)//We check for updated weather forecast once every hour
+ 
+ if(iterations > 30)//We check for updated weather forecast once every min
  {
+   current_city++;
+   if (current_city == 4){
+    current_city =0;
+   }
    getWeatherData();
    printWeatherIcon(weatherID);
-   iterations = 0;   
+   iterations = 0;
+   
  }
 
+ getCity();
+ sendCityToNextion();
+
+ getWind();
+ sendWindToNextion();
+ 
  getTemperature();
  sendTemperatureToNextion();
  
@@ -90,7 +110,7 @@ void connectToWifi()
 
 void initSensor()
 {
-  bool status = bme.begin(BME280_ADDRESS);
+  bool status = bme.begin(BME280_ADDRESS, &I2CBME);
   if (!status) {
     Serial.println("Could not find a valid BME280 sensor, check wiring!");
     while (1);
@@ -104,21 +124,75 @@ void blinkLED()
   digitalWrite(LED_PIN,LOW);
 }
 
+void getCity()
+{
+  switch(CityIDs[current_city]){
+    case 2984701:
+      if (current_city == 0){
+        strncpy(city,"Home",sizeof(city));
+      }else{
+        strncpy(city,"Quimper",sizeof(city));
+      }
+      break;
+    case 3022242:
+      strncpy(city,"Crozon",sizeof(city));
+      break;
+    case 2997465:
+      strncpy(city,"Loudeac",sizeof(city));
+      break;
+    default:
+      strncpy(city,"Home",sizeof(city));
+      break;
+  }
+  
+}
+
+void getWindDirection(int value){
+  if (value >= 337 || value <= 22)   strncpy(stringwinddirection,"N",2);
+  else if (value >= 22 && value <= 68)   strncpy(stringwinddirection,"NE",2);
+  else if (value >= 68 && value <= 112)   strncpy(stringwinddirection,"E ",2);
+  else if (value >= 112 && value <= 157)   strncpy(stringwinddirection,"SE ",2);
+  else if (value >= 157 && value <= 202)   strncpy(stringwinddirection,"S ",2);
+  else if (value >= 202 && value <= 247) strncpy(stringwinddirection,"SW ",2);
+  else if (value >= 247 && value <= 292) strncpy(stringwinddirection,"W ",2);
+  else if (value >= 292 && value <= 337) strncpy(stringwinddirection,"NW ",2);
+}
+
+float getWind()
+{
+  if (current_city == 0)
+  { //If Home or Quimper
+    windspeed = 0;
+    winddirection = 0;
+    stringwinddirection[0] = 0;
+    stringwinddirection[1] = 1;
+  }
+}
+
 float getTemperature()
 {
-  temperature = bme.readTemperature();
+  if (current_city == 0)
+  { //If Home or Quimper
+    temperature = bme.readTemperature();
+  }
 }
 
 float getHumidity()
 {
-  humidity = bme.readHumidity();
+  if (current_city == 0)
+  { //If Home or Quimper
+    humidity = bme.readHumidity();
+  }
 }
 
 float getPressure()
 {
-  pressure = bme.readPressure();
-  pressure = bme.seaLevelForAltitude(ALTITUDE,pressure);
-  pressure = pressure/100.0F;
+  if (current_city == 0)
+  { //If Home or Quimper
+    pressure = bme.readPressure();
+    pressure = bme.seaLevelForAltitude(ALTITUDE,pressure);
+    pressure = pressure/100.0F;
+  }
 }
 
 void getWeatherData() //client function to send/receive GET request data.
@@ -126,6 +200,7 @@ void getWeatherData() //client function to send/receive GET request data.
   String result ="";
   WiFiClient client;
   const int httpPort = 80;
+  String CityID = String(CityIDs[current_city]);
   if (!client.connect(servername, httpPort)) {
         return;
     }
@@ -164,12 +239,17 @@ if (!root.success())
 }
 
 String location = root["city"]["name"];
-String temperature = root["list"]["main"]["temp"];
 String weather = root["list"]["weather"]["main"];
 String description = root["list"]["weather"]["description"];
 String idString = root["list"]["weather"]["id"];
 String timeS = root["list"]["dt_txt"];
 
+temperature = root["list"]["main"]["temp"];
+humidity = root["list"]["main"]["humidity"];
+pressure = root["list"]["main"]["pressure"];
+getWindDirection((int)(root["list"]["wind"]["deg"]));
+windspeed = (int)(((float)(root["list"]["wind"]["speed"])) * 1.94);//Convert m/s to kt
+//http://api.openweathermap.org/data/2.5/forecast?id=2984701&units=metric&cnt=1&APPID=fd816d77a7e7462a295a3abf2a22a03a
 weatherID = idString.toInt();
 Serial.print("\nWeatherID: ");
 Serial.print(weatherID);
@@ -181,6 +261,25 @@ void showConnectingIcon()
 {
   Serial.println();
   String command = "weatherIcon.pic=3";
+  Serial.print(command);
+  endNextionCommand();
+}
+
+void sendCityToNextion()
+{
+  String command = "city.txt=\""+String(city)+"\"";
+  Serial.print(command);
+  endNextionCommand();
+}
+
+void sendWindToNextion()
+{
+  String command ;
+  command = "winddirection.txt=\""+String(stringwinddirection)+"\"";
+  Serial.print(command);
+  endNextionCommand();
+
+  command = "windspeed.txt=\""+String(windspeed)+"\"";
   Serial.print(command);
   endNextionCommand();
 }
